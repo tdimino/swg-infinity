@@ -39,18 +39,24 @@ In the Configure app, check **DirectX to Metal translation layer – (DXMT)**. T
 4. Click **Run**
 5. Close Winetricks when done
 
-## 5. Get the game files
-
-The Infinity launcher crashes under Wine (Tauri/WebView2 COM fault). We bypass it and download directly from the public patch server.
+## 5. Install the CLI
 
 ```bash
 cd ~/Desktop/Programming/swg-infinity
-./download-game.sh
+make install    # symlinks bin/swg → ~/bin/swg
+```
+
+## 6. Get the game files
+
+The Infinity launcher crashes under Wine (Tauri/WebView2 COM fault). The CLI downloads directly from the public patch server.
+
+```bash
+swg download
 ```
 
 This fetches the manifest from `https://updater.swginfinity.com/manifest.json`, downloads all 51 files (~5.6 GB), and verifies MD5 hashes. Resumable — rerun to retry any failures.
 
-## 6. Copy game files into the wrapper
+## 7. Copy game files into the wrapper
 
 ```bash
 WRAPPER="$HOME/Applications/Sikarugir/SWG Infinity.app/Contents/SharedSupport/prefix/drive_c"
@@ -58,24 +64,23 @@ mkdir -p "$WRAPPER/SWG Infinity"
 cp -R ~/Desktop/Programming/swg-infinity/game-files/* "$WRAPPER/SWG Infinity/"
 ```
 
-## 7. Authenticate
+## 8. Authenticate
 
 ```bash
-cd ~/Desktop/Programming/swg-infinity
-./login.sh
+swg login
 ```
 
 Authenticates via MFA and writes `swgemu_login.cfg` + `swgemu.cfg` into the game directory. Also patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`) if missing—these must be in the same `[SharedFile]` section as the patch entries, not in a separate config file.
 
-## 8. Launch
+## 9. Launch
 
-The game must run with its working directory set to the game folder — Sikarugir's `start.exe` doesn't do this, so use the launch script:
+The game must run with its working directory set to the game folder — Sikarugir's `start.exe` doesn't do this:
 
 ```bash
-./launch.sh
+swg launch
 ```
 
-This runs Wine directly with the correct CWD. Use `./launch.sh --login` to authenticate and launch in one step.
+This runs Wine directly with the correct CWD. Use `swg launch --login` to authenticate and launch in one step.
 
 ### First launch tips
 
@@ -91,8 +96,8 @@ This runs Wine directly with the correct CWD. Use `./launch.sh --login` to authe
 |---------|-----|
 | Creator hangs during wrapper creation | Kill stale `wineserver` processes, restart Creator |
 | "No new executables found" after DirectX install | Expected — use Winetricks `d3dx9` instead of the redistributable |
-| `defaultappearance.apt could not be found` / `int3` crash | Base `.tre` entries missing from `swgemu_live.cfg`, or in a separate `swgemu_preload.cfg` with its own `[SharedFile]` header (SWG's config parser replaces duplicate sections). Run `login.sh` to patch. |
-| `libinotify.0.dylib` not loaded | Use `launch.sh` (sets `DYLD_FALLBACK_LIBRARY_PATH`) instead of double-clicking the wrapper |
-| Game crashes immediately after MoltenVK init | CWD wrong — use `launch.sh`, not Sikarugir's built-in launch |
+| `defaultappearance.apt could not be found` / `int3` crash | Base `.tre` entries missing from `swgemu_live.cfg`, or in a separate `swgemu_preload.cfg` with its own `[SharedFile]` header (SWG's config parser replaces duplicate sections). Run `swg login` to patch. |
+| `libinotify.0.dylib` not loaded | Use `swg launch` (sets `DYLD_FALLBACK_LIBRARY_PATH`) instead of double-clicking the wrapper |
+| Game crashes immediately after MoltenVK init | CWD wrong — use `swg launch`, not Sikarugir's built-in launch |
 | Weird FPS / VSync issues | Run in windowed/borderless mode |
 | Anticheat warning | Sentinel is DLL-based, not kernel — Wine-compatible |

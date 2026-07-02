@@ -2,63 +2,77 @@
 
 ## What This Is
 
-Mac setup guide + download tooling for [SWG Infinity](https://www.swginfinity.com/), a pre-CU Star Wars Galaxies private server. The Tauri-based Windows launcher crashes under Wine (WebView2 COM fault in ole32.dll), so we bypass it entirely—downloading game files directly from the public patch server and running the game client through Sikarugir (free Wine wrapper with DXMT).
+Mac setup guide + CLI tooling for [SWG Infinity](https://www.swginfinity.com/), a pre-CU Star Wars Galaxies private server. The Tauri-based Windows launcher crashes under Wine (WebView2 COM fault in ole32.dll), so the `swg` CLI bypasses it entirely—downloading game files from the public patch server, authenticating via the API, and launching the game client through Sikarugir (free Wine wrapper with DXMT).
 
 ## Architecture
 
 ```
 swg-infinity/
-├── README.md                    # Full Mac setup guide (Sikarugir + direct download)
-├── setup-steps.md               # Condensed step-by-step setup (commands only)
-├── infrastructure.md            # Launcher internals, server infra, auth flow
-├── login.sh                     # Auth script — replicates launcher's login flow
-├── launch.sh                   # Runs Wine directly with correct CWD + env vars
-├── CLAUDE.md                    # This file
-├── download-game.sh             # Downloads all game files from patch server
-├── Infinity-Launcher-Setup.exe  # Windows launcher installer (archived reference)
-├── project-thorn-intercept.png  # README screenshot
-├── project-thorn-dossier.png    # README screenshot
-└── demos/
-    └── project-thorn/           # Interactive Imperial Intelligence terminal demo
+├── bin/swg                     # CLI entry point — sources lib/*.sh, dispatches subcommands
+├── lib/
+│   ├── swg-core.sh             # Shared constants (WRAPPER, WINE, PREFIX), logging, plist helpers
+│   ├── swg-wine.sh             # Wine env setup, exe invocation, crash diagnostics
+│   ├── swg-audit.sh            # Config file + TRE file validation
+│   ├── swg-auth.sh             # Auth flow (MFA), config writing, live.cfg patching
+│   ├── swg-download.sh         # Manifest fetch, file download, MD5 verify
+│   └── swg-manage.sh           # Status, config read/write, winetricks subcommands
+├── completions/swg.zsh         # Zsh tab completions
+├── Makefile                    # install/uninstall (symlink bin/swg → ~/bin/swg)
+├── launch.sh                   # Shim → exec bin/swg launch
+├── login.sh                    # Shim → exec bin/swg login
+├── download-game.sh            # Shim → exec bin/swg download
+├── README.md                   # Full Mac setup guide
+├── setup-steps.md              # Condensed step-by-step (commands only)
+├── infrastructure.md           # Launcher internals, server infra, auth flow
+└── demos/project-thorn/        # Interactive Imperial Intelligence terminal demo
 ```
+
+## CLI
+
+`swg <command> [options]` — all game management from one tool.
+
+| Command | Description |
+|---------|-------------|
+| `launch [--login]` | Diagnostic audit + Wine launch |
+| `login` | Authenticate with MFA, write configs, patch `.tre` entries |
+| `download [--target dir]` | Download game files from patch server (~5.6 GB, MD5-verified) |
+| `audit` | Validate config + TRE files, exit 0/1 |
+| `status` | Wine version, renderer, file counts, server reachability |
+| `config [key [value]]` | Read/write Sikarugir plist flags |
+| `winetricks <verb>` | Install components via wrapper's winetricks |
+| `shell` | Subshell with Wine env vars set |
+| `kill` | Kill the wineserver |
+
+**Library structure:** `swg-core.sh` defines shared constants (`WRAPPER`, `WINE`, `PREFIX`, `GAME_DIR`, `PLIST`) and helpers (`swg_log`, `swg_die`, `swg_require`, `swg_plist_read/write`). All other libs depend on it. Each subcommand maps to a `swg_cmd_*` function in its lib file.
+
+**Dependencies:** `bash`, `curl`, `python3` (stdlib only)
 
 ## Key Infrastructure
 
 - **Patch server**: `https://updater.swginfinity.com`
-- **Game manifest**: `https://updater.swginfinity.com/manifest.json` — 51 files, ~5.6 GB, MD5-verified
+- **Game manifest**: `https://updater.swginfinity.com/manifest.json` — 51 files, MD5-verified
 - **File hosting**: Dropbox via 302 redirect from `https://updater.swginfinity.com/files/live/{filename}`
-- **Launcher update API**: `https://updater.swginfinity.com/api/v2/launcher/update-check`
-- **Fallback API**: `https://api2.swginfinity.com/api/v2/launcher/update-check`
-- **Main API**: `https://api.swginfinity.com` (authenticated endpoints, not used by download script)
-
-## download-game.sh
-
-Fetches manifest, downloads all required files with `curl -L` (follows Dropbox redirects), verifies MD5 hashes. Resumable—skips files that pass verification on rerun. Default target: `./game-files/`.
-
-**Dependencies**: `curl`, `python3`, `hashlib` (stdlib)
+- **Auth API**: `https://my.swginfinity.com/api/auth` — login, MFA email-code, verify
+- **Game server**: `game.swginfinity.com:44453` (fallback if API doesn't return server config)
 
 ## The Launcher Problem
 
-The Infinity Launcher (v0.2.22) is a Tauri/Rust app using WebView2 for its UI. Under Wine (CrossOver 26.2.0 / Wine 11.0), WebView2's COM initialization crashes with a page fault in ole32.dll. WebView2 processes spawn but the launcher dies during the COM handshake. No combination of runtime installs (WebView2 Evergreen, VC++ 2015, etc.) fixes it—the issue is in Wine's ole32 COM bridge, not a missing dependency.
-
-The game client (`SwgClient_r.exe`) runs fine under Wine. The launcher is just a download/patch manager—bypassing it loses nothing.
+The Infinity Launcher (Tauri/Rust + WebView2) crashes under Wine—page fault in ole32.dll during COM initialization. The game client (`SwgClient_r.exe`) runs fine. The launcher is just a download/patch manager—the CLI replaces it completely.
 
 ## Sikarugir
 
-Free, open-source Wine wrapper for macOS. Successor to Whisky. Installs via `brew install --cask Sikarugir-App/sikarugir/sikarugir`. Creates native `.app` wrappers with built-in DXMT (DirectX-to-Metal). The game client runs inside a Sikarugir wrapper.
-
-- **Wrapper location**: `~/Applications/Sikarugir/SWG Infinity.app`
-- **C: drive**: `~/Applications/Sikarugir/SWG Infinity.app/Contents/SharedSupport/prefix/drive_c/`
-- **Game files**: `C:\SWG Infinity\` inside the wrapper
-- **DirectX 9**: Installed via Winetricks `d3dx9` (not the manual redistributable—the extractor dialog doesn't surface under Wine)
-- **DXMT**: Must be enabled in Configure for GPU performance on Apple Silicon
+- **Wrapper**: `~/Applications/Sikarugir/SWG Infinity.app`
+- **Wine prefix**: `Contents/SharedSupport/prefix/`
+- **Game dir**: `prefix/drive_c/SWG Infinity/`
+- **Config parser quirk**: duplicate `[SharedFile]` sections replace rather than merge—all `.tre` entries must live in one section (`swg login` handles this)
 
 ## Project Thorn
 
-Interactive Imperial Intelligence terminal demo in `demos/project-thorn/`. Built from 2003-era SWG character bios (Vorian Ducal / Jiff Gorda). Single HTML file, no dependencies. Separate from the game setup—included for historical context. See `demos/project-thorn/README.md` for full docs.
+Interactive Imperial Intelligence terminal demo in `demos/project-thorn/`. Built from 2003-era SWG character bios (Vorian Ducal / Jiff Gorda). Single HTML file, no dependencies. See `demos/project-thorn/README.md`.
 
 ## Conventions
 
-- README voice follows Tom's style: connected em dashes (—), no hedging, declarative prose
+- README voice: connected em dashes (—), no hedging, declarative prose
 - No Co-Authored-By trailers in commits
-- Screenshots use descriptive kebab-case filenames
+- Screenshots: descriptive kebab-case filenames
+- Shell: `set -euo pipefail`, function names prefixed `swg_`, subcommand handlers prefixed `swg_cmd_`

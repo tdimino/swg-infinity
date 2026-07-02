@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SWG_ROOT="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || readlink "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+
+# Source core first (constants/helpers), then remaining libs
+source "$SWG_ROOT/lib/swg-core.sh"
+for lib in "$SWG_ROOT"/lib/swg-*.sh; do
+    [ "$(basename "$lib")" = "swg-core.sh" ] && continue
+    # shellcheck source=/dev/null
+    source "$lib"
+done
+
+swg_usage() {
+    cat <<'EOF'
+Usage: swg <command> [options]
+
+Commands:
+  launch [--login]       Launch SWG Infinity (with optional login first)
+  login                  Authenticate and write config files
+  download [--target d]  Download game files from patch server
+  audit                  Validate config and TRE files
+  status                 Show wrapper state and server reachability
+  config [key [value]]   Read/write Sikarugir plist flags
+  winetricks <verb>      Install winetricks components
+  shell                  Open subshell with Wine env vars set
+  kill                   Kill the wineserver
+
+Run 'swg <command> --help' for command-specific help.
+EOF
+}
+
+cmd="${1:-}"
+[ -z "$cmd" ] && { swg_usage; exit 0; }
+shift
+
+case "$cmd" in
+    launch)     swg_cmd_launch "$@" ;;
+    login)      swg_cmd_login "$@" ;;
+    download)   swg_cmd_download "$@" ;;
+    audit)      swg_cmd_audit "$@" ;;
+    status)     swg_cmd_status "$@" ;;
+    config)     swg_cmd_config "$@" ;;
+    winetricks) swg_cmd_winetricks "$@" ;;
+    shell)      swg_cmd_shell "$@" ;;
+    kill)       swg_cmd_kill "$@" ;;
+    help|-h|--help) swg_usage ;;
+    *)
+        echo "Unknown command: $cmd"
+        echo ""
+        swg_usage
+        exit 1
+        ;;
+esac

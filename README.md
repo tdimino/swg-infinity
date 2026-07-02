@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="tanit.svg" alt="Symbol of Tanit" width="80"/>
+</p>
+
 # SWG Infinity on Mac
 
 Step-by-step guide for running [SWG Infinity](https://www.swginfinity.com/) on macOS via [Sikarugir](https://github.com/Sikarugir-App/Sikarugir)—a free, open-source Wine wrapper with built-in DirectX-to-Metal translation.
 
-SWG Infinity is a pre-CU Star Wars Galaxies private server—the version of the game before Sony Online Entertainment overhauled it in 2005. The launcher and client are Windows-only, but Wine-based compatibility layers run them on Mac. CodeWeavers rates SWG as **"Runs Great"** on macOS.
+SWG Infinity is a pre-CU Star Wars Galaxies private server—the ideal version of the MMO, before SOE destroyed it with the New Game Experience in 2005. The launcher and client are Windows-only, but Wine-based compatibility layers run them on Mac. CodeWeavers rates SWG as **"Runs Great"** on macOS.
 
 ## Prerequisites
 
@@ -59,6 +63,40 @@ SWG uses DirectX 9. Wine needs the June 2010 DirectX redistributable installed m
 9. Ignore the "Maybe the installer failed?" popup again—go to the installer in the Dock
 10. Click **Accept → Next → Next → Finish**
 
+## The `swg` CLI
+
+This repo includes a unified CLI that replaces the Windows launcher entirely—download, authenticate, audit, configure, and launch the game from a single command.
+
+### Install
+
+```bash
+make install    # symlinks bin/swg → ~/bin/swg
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `swg launch [--login]` | Full diagnostic audit + Wine launch. `--login` runs auth first. |
+| `swg login` | Authenticate with MFA, write config files, patch `.tre` entries |
+| `swg download [--target dir]` | Download game files from patch server (51 files, ~5.6 GB, MD5-verified) |
+| `swg audit` | Validate config files, `.tre` references, plist flags—exit 0 if clean |
+| `swg status` | Show Wine version, active renderer, file counts, server reachability |
+| `swg config [key [value]]` | Read/write Sikarugir plist flags (DXMT, WINEESYNC, etc.) |
+| `swg winetricks <verb>` | Install components via the wrapper's winetricks |
+| `swg shell` | Open subshell with `WINEPREFIX` and Wine env vars set |
+| `swg kill` | Kill the wineserver |
+
+The original standalone scripts (`launch.sh`, `login.sh`, `download-game.sh`) are now shims that delegate to the CLI—backward compatible.
+
+### Zsh completions
+
+Tab completion is installed automatically with `make install` if `~/.zsh/completions/` exists, or source it manually:
+
+```bash
+source completions/swg.zsh
+```
+
 ## Get the game files
 
 ### The launcher problem
@@ -67,13 +105,12 @@ The SWG Infinity launcher is a Tauri app that uses Microsoft Edge WebView2 for i
 
 This means **the launcher won't work under Wine**. You need to get the game files another way.
 
-### Option A—Direct download script (recommended)
+### Option A—`swg download` (recommended)
 
-The game files are hosted on SWG Infinity's public patch server. This repo includes a script that pulls them directly—no launcher, no Windows machine, no VM.
+The game files are hosted on SWG Infinity's public patch server. The CLI pulls them directly—no launcher, no Windows machine, no VM.
 
 ```bash
-cd swg-infinity
-./download-game.sh
+swg download
 ```
 
 This fetches the manifest from `https://updater.swginfinity.com/manifest.json`, downloads all 51 files (~5.6 GB), and verifies each file's MD5 hash. Downloads are resumable—run it again and it skips files that already pass verification.
@@ -81,7 +118,7 @@ This fetches the manifest from `https://updater.swginfinity.com/manifest.json`, 
 Files land in `./game-files/` by default, or pass a custom path:
 
 ```bash
-./download-game.sh ~/Applications/SWG\ Infinity.app/Contents/SharedSupport/prefix/drive_c/SWG\ Infinity
+swg download --target ~/Applications/Sikarugir/SWG\ Infinity.app/Contents/SharedSupport/prefix/drive_c/SWG\ Infinity
 ```
 
 ### Option B—Copy from a Windows machine
@@ -102,22 +139,21 @@ Once you have the game files in your wrapper:
 
 ### Authenticate
 
-The launcher normally handles login and config generation. Since we bypass it, use the included auth script:
+The launcher normally handles login and config generation. Since we bypass it:
 
 ```bash
-cd swg-infinity
-./login.sh
+swg login
 ```
 
 This authenticates via MFA (check your email for the code), writes `swgemu_login.cfg` with server connection details, generates `swgemu.cfg` with the correct include chain, and patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`).
 
 ### Launch
 
-Sikarugir's built-in launcher uses Wine's `start.exe`, which doesn't set the working directory to the game folder. SWG requires CWD = game directory because `.tre` paths in the config are relative. Use the included launch script:
+Sikarugir's built-in launcher uses Wine's `start.exe`, which doesn't set the working directory to the game folder. SWG requires CWD = game directory because `.tre` paths in the config are relative:
 
 ```bash
-./launch.sh           # Launch the game
-./launch.sh --login   # Authenticate first, then launch
+swg launch           # Launch the game
+swg launch --login   # Authenticate first, then launch
 ```
 
 This runs Wine directly with the correct CWD, sets `DYLD_FALLBACK_LIBRARY_PATH` for Wine's dylib dependencies, captures full crash diagnostics, and detects crash dumps.
@@ -136,11 +172,11 @@ This Fatal crash means the game's TreeFile system can't find base assets. The fi
 
 **Root cause:** the SWG config parser **replaces** duplicate INI sections instead of merging them. If `bottom.tre` and `infinity_xmas.tre` are in a separate `swgemu_preload.cfg` with its own `[SharedFile]` header, and that file is included after `swgemu_live.cfg`, the second `[SharedFile]` section wipes out all 25 patch `.tre` entries from the first. The game then only sees 2 of 27 archives.
 
-**Fix:** run `./login.sh`—it patches the base `.tre` entries directly into `swgemu_live.cfg`'s `[SharedFile]` section. If you previously created a `swgemu_preload.cfg`, delete it and remove its `.include` line from `swgemu.cfg`.
+**Fix:** run `swg login`—it patches the base `.tre` entries directly into `swgemu_live.cfg`'s `[SharedFile]` section. If you previously created a `swgemu_preload.cfg`, delete it and remove its `.include` line from `swgemu.cfg`.
 
 ### CWD / libinotify crashes
 
-Use `./launch.sh` instead of double-clicking the wrapper. The launch script sets the correct working directory (SWG needs CWD = game directory for relative `.tre` paths) and `DYLD_FALLBACK_LIBRARY_PATH` for Wine's dylib dependencies.
+Use `swg launch` instead of double-clicking the wrapper. The CLI sets the correct working directory (SWG needs CWD = game directory for relative `.tre` paths) and `DYLD_FALLBACK_LIBRARY_PATH` for Wine's dylib dependencies.
 
 ### Anticheat (Sentinel)
 
@@ -197,3 +233,27 @@ Twenty years from forum roleplay to an Imperial terminal. Now back to the game i
 ## Quick reference
 
 For a condensed step-by-step of the exact setup process (no explanations, just commands), see [`setup-steps.md`](setup-steps.md).
+
+## Repo structure
+
+```
+swg-infinity/
+├── bin/swg                     # CLI entry point
+├── lib/
+│   ├── swg-core.sh             # Shared constants, logging, plist helpers
+│   ├── swg-wine.sh             # Wine env, exe invocation, crash diagnostics
+│   ├── swg-audit.sh            # Config + TRE file validation
+│   ├── swg-auth.sh             # Auth flow, MFA, config writing
+│   ├── swg-download.sh         # Manifest fetch, file download, MD5 verify
+│   └── swg-manage.sh           # Status, config, winetricks subcommands
+├── completions/swg.zsh         # Zsh tab completions
+├── Makefile                    # install/uninstall
+├── launch.sh                   # Shim → swg launch
+├── login.sh                    # Shim → swg login
+├── download-game.sh            # Shim → swg download
+├── README.md                   # This file
+├── CLAUDE.md                   # Agent docs
+├── setup-steps.md              # Condensed setup commands
+├── infrastructure.md           # Launcher internals, server infra, auth flow
+└── demos/project-thorn/        # Imperial Intelligence terminal demo
+```
