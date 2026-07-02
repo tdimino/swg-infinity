@@ -1,0 +1,11 @@
+# Game data (6+ GB)
+game-files/
+
+# Logs
+logs/
+
+# Windows installer
+*.exe
+
+# macOS
+.DS_Store
