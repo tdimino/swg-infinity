@@ -2,29 +2,68 @@
 # Authentication flow, config writing, and live.cfg patching.
 
 SWG_API_BASE="https://my.swginfinity.com/api/auth"
+SWG_KEYCHAIN_SERVICE="swg-infinity"
+
+swg_keychain_get() {
+    local field="$1"
+    security find-generic-password -s "$SWG_KEYCHAIN_SERVICE" -a "$field" -w 2>/dev/null
+}
+
+swg_keychain_set() {
+    local field="$1" value="$2"
+    security delete-generic-password -s "$SWG_KEYCHAIN_SERVICE" -a "$field" >/dev/null 2>&1 || true
+    security add-generic-password -s "$SWG_KEYCHAIN_SERVICE" -a "$field" -w "$value"
+}
+
+swg_keychain_delete() {
+    security delete-generic-password -s "$SWG_KEYCHAIN_SERVICE" -a "username" >/dev/null 2>&1 || true
+    security delete-generic-password -s "$SWG_KEYCHAIN_SERVICE" -a "password" >/dev/null 2>&1 || true
+    echo "Removed stored credentials from Keychain."
+}
+
+_swg_auth_tmpfile=""
+_swg_auth_cfg=""
+
+_swg_auth_cleanup() {
+    rm -f "${_swg_auth_tmpfile:-}" "${_swg_auth_cfg:-}"
+    _swg_auth_tmpfile=""
+    _swg_auth_cfg=""
+}
 
 swg_login() {
+    local save_creds=false
+    if [ "${1:-}" = "--save" ]; then
+        save_creds=true
+    fi
+
     echo "SWG Infinity Login"
     echo "==================="
     echo ""
 
-    read -rp "Username: " username
-    read -rsp "Password: " password
-    echo ""
+    local username password
+    username=$(swg_keychain_get "username" || true)
+    password=$(swg_keychain_get "password" || true)
+
+    if [ -n "$username" ] && [ -n "$password" ]; then
+        echo "Using stored credentials for $username"
+    else
+        read -rp "Username: " username
+        read -rsp "Password: " password
+        echo ""
+    fi
 
     echo "Authenticating..."
 
-    local tmpfile
-    tmpfile=$(mktemp)
-    chmod 600 "$tmpfile"
-    trap 'rm -f "$tmpfile"' EXIT RETURN
+    _swg_auth_tmpfile=$(mktemp)
+    chmod 600 "$_swg_auth_tmpfile"
+    trap '_swg_auth_cleanup' EXIT
 
     local http_code body
     http_code=$(python3 -c "import json,sys; print(json.dumps({'username': sys.argv[1], 'password': sys.argv[2], 'mfaEnabled': True, 'sessionDurationDays': 30}))" "$username" "$password" \
-        | curl -s -o "$tmpfile" -w '%{http_code}' -X POST "$SWG_API_BASE/login" \
+        | curl -s -o "$_swg_auth_tmpfile" -w '%{http_code}' -X POST "$SWG_API_BASE/login" \
             -H "Content-Type: application/json" \
             --data-binary @-)
-    body=$(cat "$tmpfile")
+    body=$(cat "$_swg_auth_tmpfile")
 
     if [ "$http_code" != "200" ]; then
         local error
@@ -47,10 +86,10 @@ swg_login() {
         read -rp "Enter code: " mfa_code
 
         http_code=$(swg_json_build mfaToken "$mfa_token" code "$mfa_code" \
-            | curl -s -o "$tmpfile" -w '%{http_code}' -X POST "$SWG_API_BASE/verify-email-code" \
+            | curl -s -o "$_swg_auth_tmpfile" -w '%{http_code}' -X POST "$SWG_API_BASE/verify-email-code" \
                 -H "Content-Type: application/json" \
                 --data-binary @-)
-        body=$(cat "$tmpfile")
+        body=$(cat "$_swg_auth_tmpfile")
 
         if [ "$http_code" != "200" ]; then
             local error
@@ -64,6 +103,15 @@ swg_login() {
 
     [ -z "$access_token" ] && swg_die "No access token received."
 
+    _swg_auth_cleanup
+    trap - EXIT
+
+    if [ "$save_creds" = true ]; then
+        swg_keychain_set "username" "$username"
+        swg_keychain_set "password" "$password"
+        echo "Credentials saved to Keychain."
+    fi
+
     echo "Authenticated."
     swg_discover_server "$access_token"
 }
@@ -72,11 +120,10 @@ swg_discover_server() {
     local token="$1"
     echo "Fetching server info..."
 
-    local auth_cfg
-    auth_cfg=$(mktemp)
-    chmod 600 "$auth_cfg"
-    printf 'header = "Authorization: Bearer %s"\n' "$token" > "$auth_cfg"
-    trap 'rm -f "$auth_cfg"' RETURN
+    _swg_auth_cfg=$(mktemp)
+    chmod 600 "$_swg_auth_cfg"
+    printf 'header = "Authorization: Bearer %s"\n' "$token" > "$_swg_auth_cfg"
+    trap '_swg_auth_cleanup' EXIT
 
     local login_host="" login_port=""
     for endpoint in \
@@ -86,7 +133,7 @@ swg_discover_server() {
         "https://api.swginfinity.com/api/v2/launcher/launch"; do
 
         local resp code
-        resp=$(curl -s -w "\n%{http_code}" -K "$auth_cfg" "$endpoint" \
+        resp=$(curl -s -w "\n%{http_code}" -K "$_swg_auth_cfg" "$endpoint" \
             -H "Content-Type: application/json")
         code=$(echo "$resp" | tail -1)
 
@@ -123,6 +170,8 @@ print('')
     login_port="${login_port:-44453}"
 
     echo "Server: $login_host:$login_port"
+    _swg_auth_cleanup
+    trap - EXIT
     swg_write_configs "$login_host" "$login_port"
 }
 
@@ -163,13 +212,23 @@ swg_patch_live_cfg() {
 }
 
 swg_cmd_login() {
-    if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-        echo "Usage: swg login"
-        echo "Authenticate with SWG Infinity and write game config files."
-        return 0
-    fi
+    case "${1:-}" in
+        --help|-h)
+            echo "Usage: swg login [--save] [--forget]"
+            echo "Authenticate with SWG Infinity and write game config files."
+            echo ""
+            echo "Options:"
+            echo "  --save    Store credentials in macOS Keychain"
+            echo "  --forget  Remove stored credentials from Keychain"
+            return 0
+            ;;
+        --forget)
+            swg_keychain_delete
+            return 0
+            ;;
+    esac
     swg_require "$GAME_DIR" "Game directory"
-    swg_login
+    swg_login "$@"
     echo ""
     echo "Ready to launch."
 }

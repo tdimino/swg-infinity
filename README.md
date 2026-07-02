@@ -78,7 +78,7 @@ make install    # symlinks bin/swg → ~/bin/swg
 | Command | Description |
 |---------|-------------|
 | `swg launch [--login]` | Full diagnostic audit + Wine launch. `--login` runs auth first. |
-| `swg login` | Authenticate with MFA, write config files, patch `.tre` entries |
+| `swg login [--save] [--forget]` | Authenticate with MFA, write config files. `--save` stores credentials in macOS Keychain. |
 | `swg download [--target dir]` | Download game files from patch server (51 files, ~5.6 GB, MD5-verified) |
 | `swg audit` | Validate config files, `.tre` references, plist flags—exit 0 if clean |
 | `swg status` | Show Wine version, active renderer, file counts, server reachability |
@@ -142,10 +142,13 @@ Once you have the game files in your wrapper:
 The launcher normally handles login and config generation. Since we bypass it:
 
 ```bash
-swg login
+swg login --save    # first time — stores credentials in macOS Keychain
+swg login           # subsequent — auto-uses stored credentials
 ```
 
 This authenticates via MFA (check your email for the code), writes `swgemu_login.cfg` with server connection details, generates `swgemu.cfg` with the correct include chain, and patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`).
+
+Credentials are stored in the macOS Keychain (encrypted, not plaintext). Run `swg login --forget` to remove them.
 
 ### Launch
 
