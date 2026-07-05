@@ -24,7 +24,7 @@ The game client loads configs via `.include` directives in `swgemu.cfg`:
 .include "user.cfg"
 ```
 
-**Critical**: the SWG config parser **replaces** duplicate INI sections instead of merging them. If two included files both define `[SharedFile]`, the second one overwrites the first entirely. This is why `swgemu_preload.cfg` (which the Windows launcher generates with its own `[SharedFile]` header) must NOT be included separately—its entries must go directly into `swgemu_live.cfg`. Our `login.sh` handles this automatically.
+**Critical**: the SWG config parser **replaces** duplicate INI sections instead of merging them. If two included files both define `[SharedFile]`, the second one overwrites the first entirely. This is why `swgemu_preload.cfg` (which the Windows launcher generates with its own `[SharedFile]` header) must NOT be included separately—its entries must go directly into `swgemu_live.cfg`. Our `swg login` handles this automatically.
 
 ### Launcher Tauri commands
 
@@ -103,19 +103,35 @@ Note: Ports on `game.swginfinity.com` appear filtered from external scans. The g
 
 ---
 
-## What the Launcher Generates
+## What the Launcher Provides at Launch
 
-The Infinity launcher dynamically generates several config files that don't ship with the game download. Without them, the client crashes with `int3` at `swgemu+0x6a1e3f` — a Fatal() handler triggered because base assets can't be found.
+The Infinity launcher does more than download files and write configs — it launches the client with command-line arguments and environment variables the game cannot start without. All of the following were extracted from `infinity-launcher.exe` strings and confirmed by `WINEDEBUG=+file` tracing. `swg launch` replicates every item.
 
-### Base `.tre` registration (critical)
+### Command-line config args (critical)
 
-The launcher registers `bottom.tre` and `infinity_xmas.tre` in the searchTree at priority 00 (lowest, overridden by patches). On Windows, the launcher writes these into a separate `swgemu_preload.cfg` — but this approach breaks under our setup because the SWG config parser **replaces** duplicate `[SharedFile]` sections. If `swgemu_preload.cfg` is included after `swgemu_live.cfg`, its `[SharedFile]` wipes out all 25 patch `.tre` entries from `swgemu_live.cfg`. The game then only loads `bottom.tre` and `infinity_xmas.tre`, can't find `appearance/defaultappearance.apt` (which is in `mtg_patch_002_appearance_02.tre`), and crashes.
+The client refuses to load its `.tre` archives unless launched with the launcher's config arguments:
 
-Our `login.sh` patches these entries directly into `swgemu_live.cfg`'s existing `[SharedFile]` section instead. No duplicate sections, no data loss.
+```
+swgemu.exe -- -s Station subscriptionFeatures=1 gameFeatures=65535 -s SwgClient allowMultipleInstances=true
+```
+
+Launched bare, the client reads every config file normally but TreeFile registers zero archives — a `WINEDEBUG=+file` trace shows the `.cfg` reads with not a single `.tre` open following them. The first asset lookup then dies: `FATAL 4d962776: appearance/defaultappearance.apt could not be found` (`int3` at `swgemu+0x6a1e3f`, the Fatal() handler). With the args, all 25 patch archives open and the game reaches the title screen.
+
+The launcher also passes `-s ClientGame loginServerAddress0=<host> loginServerPort0=<port> sessionId=<id>` — the address/port are redundant with `swgemu_login.cfg` (which we write), and `sessionId` enables auto-login past the login screen (not yet replicated; manual login works).
+
+### Client memory manager cap (critical under Wine)
+
+The client's MemoryManager preallocates ~75% of reported RAM as one contiguous block at startup — Wine's wow64 reports ~3.5 GB, so the client attempts ~2.6 GB (`allocate_virtual_memory out of memory for allocation, size a8010000`). The 32-bit address space under wow64 on Apple Silicon is fragmented by dyld, Rosetta, and libSystem; the allocation fails intermittently and fatally.
+
+The launcher sets the `SWGCLIENT_MEMORY_SIZE_MB` environment variable (checked in the client's `WinMain` before the default sizing formula — see SWG-Source `client-tools`: `WinMain.cpp`, `sharedMemoryManager/MemoryManager.cpp`). `swg launch` sets it to 1024; override via `SWG_MEMORY_MB`.
+
+### Base `.tre` registration
+
+The launcher registers `bottom.tre` and `infinity_xmas.tre` in the searchTree at priority 00 via a generated `swgemu_preload.cfg`. Our `swg login` patches these entries directly into `swgemu_live.cfg`'s `[SharedFile]` section instead.
 
 ### `swgemu_login.cfg` (critical)
 
-Server connection details — written by the launcher after authentication. Our `login.sh` replicates this.
+Server connection details — written by the launcher after authentication. Our `swg login` replicates this.
 
 ```ini
 [ClientGame]
@@ -125,7 +141,7 @@ loginServerPort0=44453
 
 ### Working directory (critical)
 
-SWG requires CWD = game directory because `.tre` paths in `swgemu_live.cfg` are relative. Sikarugir launches via `start.exe`, which doesn't propagate CWD. Confirmed by Lutris SWG Legends config, which explicitly sets `working_dir`. Our `launch.sh` bypasses `start.exe` and runs Wine directly with `cd` into the game folder.
+SWG requires CWD = game directory because `.tre` paths in `swgemu_live.cfg` are relative. Sikarugir launches via `start.exe`, which doesn't propagate CWD. Confirmed by Lutris SWG Legends config, which explicitly sets `working_dir`. Our `swg launch` bypasses `start.exe` and runs Wine directly with `cd` into the game folder.
 
 ### Sentinel anticheat (optional)
 
@@ -139,8 +155,7 @@ The launcher injects `sentinel_anticheat.dll`. Linux players report mixed result
 |------|---------|
 | `infrastructure.md` | This file — launcher internals and server infrastructure |
 | `setup-steps.md` | Condensed setup steps |
-| `README.md` | Full Mac setup guide |
-| `download-game.sh` | Direct file downloader (bypasses launcher) |
-| `login.sh` | Auth script — replicates launcher's login + MFA flow |
-| `launch.sh` | Runs Wine directly with correct CWD and env vars |
-| `Infinity-Launcher-Setup.exe` | Archived launcher installer |
+| `README.md` | Full Mac setup guide (see its Repo structure section for the full tree) |
+| `bin/swg` + `lib/*.sh` | Unified CLI — download, login, audit, launch, manage |
+| `download-game.sh`, `login.sh`, `launch.sh` | Backward-compat shims → `swg` subcommands |
+| `Infinity-Launcher-Setup.exe` | Archived launcher installer (gitignored, local only) |

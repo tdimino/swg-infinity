@@ -6,6 +6,11 @@ swg_setup_wine_env() {
     export WINEESYNC=1
     export WINEMSYNC=1
     export DYLD_FALLBACK_LIBRARY_PATH="$WRAPPER/Contents/Frameworks:$WRAPPER/Contents/SharedSupport/wine/lib"
+    # Cap the client's startup memory preallocation. Uncapped, it reserves 75%
+    # of the RAM Wine reports (~2.6 GB) as one contiguous block, which cannot
+    # fit in the fragmented 32-bit address space under wow64.
+    export SWGCLIENT_MEMORY_SIZE_MB="${SWG_MEMORY_MB:-1024}"
+    export WINE_LARGE_ADDRESS_AWARE=1
 }
 
 swg_run_exe() {
@@ -96,7 +101,12 @@ swg_cmd_launch() {
         swg_die "Launch aborted — fix the issues above first"
     fi
 
-    swg_run_exe swgemu.exe
+    # The client refuses to load its .tre archives unless launched with the
+    # launcher's config args (extracted from infinity-launcher.exe) — without
+    # them TreeFile registers nothing and the first asset lookup is fatal.
+    swg_run_exe swgemu.exe -- \
+        -s Station subscriptionFeatures=1 gameFeatures=65535 \
+        -s SwgClient allowMultipleInstances=true
 }
 
 swg_cmd_shell() {

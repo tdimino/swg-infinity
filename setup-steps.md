@@ -27,9 +27,9 @@ ps aux | grep wineserver | grep -v grep
 kill -9 <PID>
 ```
 
-## 3. Enable DXMT
+## 3. Enable DXMT (optional)
 
-In the Configure app, check **DirectX to Metal translation layer – (DXMT)**. This is the biggest performance lever on Apple Silicon.
+In the Configure app, you can check **DirectX to Metal translation layer – (DXMT)**, but note it has no effect on SWG itself—DXMT doesn't support 32-bit x86, and the game renders via Wine's builtin d3d9 (WineD3D→OpenGL). Harmless either way.
 
 ## 4. Install DirectX 9 via Winetricks
 
@@ -42,8 +42,8 @@ In the Configure app, check **DirectX to Metal translation layer – (DXMT)**. T
 ## 5. Install the CLI
 
 ```bash
-cd ~/Desktop/Programming/swg-infinity
-make install    # symlinks bin/swg → ~/bin/swg
+cd swg-infinity    # wherever you cloned this repo
+make install       # symlinks bin/swg → ~/bin/swg
 ```
 
 ## 6. Get the game files
@@ -61,7 +61,7 @@ This fetches the manifest from `https://updater.swginfinity.com/manifest.json`, 
 ```bash
 WRAPPER="$HOME/Applications/Sikarugir/SWG Infinity.app/Contents/SharedSupport/prefix/drive_c"
 mkdir -p "$WRAPPER/SWG Infinity"
-cp -R ~/Desktop/Programming/swg-infinity/game-files/* "$WRAPPER/SWG Infinity/"
+cp -R ./game-files/* "$WRAPPER/SWG Infinity/"   # from the repo root
 ```
 
 ## 8. Authenticate
@@ -82,6 +82,8 @@ swg launch
 
 This runs Wine directly with the correct CWD. Use `swg launch --login` to authenticate and launch in one step.
 
+`swg launch` also replicates two things the Windows launcher does that the game cannot start without: it passes the launcher's command-line config args (`-s Station gameFeatures=65535 ...`—the client won't load its `.tre` archives otherwise) and caps the client's startup memory preallocation via `SWGCLIENT_MEMORY_SIZE_MB=1024` so it fits Wine's 32-bit address space (override: `SWG_MEMORY_MB=1536 swg launch`).
+
 ### First launch tips
 
 - Enable **Windowed** + **Borderless** for best macOS experience
@@ -96,7 +98,8 @@ This runs Wine directly with the correct CWD. Use `swg launch --login` to authen
 |---------|-----|
 | Creator hangs during wrapper creation | Kill stale `wineserver` processes, restart Creator |
 | "No new executables found" after DirectX install | Expected — use Winetricks `d3dx9` instead of the redistributable |
-| `defaultappearance.apt could not be found` / `int3` crash | Base `.tre` entries missing from `swgemu_live.cfg`, or in a separate `swgemu_preload.cfg` with its own `[SharedFile]` header (SWG's config parser replaces duplicate sections). Run `swg login` to patch. |
+| `defaultappearance.apt could not be found` / `int3` crash | Game launched without the launcher's command-line args — the client won't load `.tre` archives without them. Use `swg launch` (passes them automatically). |
+| `allocate_virtual_memory out of memory` | Client preallocates ~2.6 GB, too big for Wine's 32-bit address space. `swg launch` caps it at 1024 MB via `SWGCLIENT_MEMORY_SIZE_MB`; adjust with `SWG_MEMORY_MB`. |
 | `libinotify.0.dylib` not loaded | Use `swg launch` (sets `DYLD_FALLBACK_LIBRARY_PATH`) instead of double-clicking the wrapper |
 | Game crashes immediately after MoltenVK init | CWD wrong — use `swg launch`, not Sikarugir's built-in launch |
 | Weird FPS / VSync issues | Run in windowed/borderless mode |

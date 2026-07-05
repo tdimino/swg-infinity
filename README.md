@@ -159,7 +159,10 @@ swg launch           # Launch the game
 swg launch --login   # Authenticate first, then launch
 ```
 
-This runs Wine directly with the correct CWD, sets `DYLD_FALLBACK_LIBRARY_PATH` for Wine's dylib dependencies, captures full crash diagnostics, and detects crash dumps.
+This runs Wine directly with the correct CWD, sets `DYLD_FALLBACK_LIBRARY_PATH` for Wine's dylib dependencies, captures full crash diagnostics, and detects crash dumps. It also handles two things the Windows launcher normally does—without them the game cannot start:
+
+- **Launcher config args**: the client only loads its `.tre` archives when passed `-- -s Station subscriptionFeatures=1 gameFeatures=65535 -s SwgClient allowMultipleInstances=true` (extracted from the launcher binary)
+- **Memory cap**: sets `SWGCLIENT_MEMORY_SIZE_MB=1024` so the client's startup preallocation fits Wine's 32-bit address space (override with `SWG_MEMORY_MB=1536 swg launch`)
 
 ### First launch
 
@@ -171,11 +174,21 @@ This runs Wine directly with the correct CWD, sets `DYLD_FALLBACK_LIBRARY_PATH` 
 
 ### `defaultappearance.apt could not be found` (int3 crash)
 
-This Fatal crash means the game's TreeFile system can't find base assets. The file exists inside `mtg_patch_002_appearance_02.tre`—the problem is the config parser losing track of which `.tre` files to load.
+This Fatal crash means the game's TreeFile system loaded zero `.tre` archives. The file exists inside `mtg_patch_002_appearance_02.tre`—the client just never opened it.
 
-**Root cause:** the SWG config parser **replaces** duplicate INI sections instead of merging them. If `bottom.tre` and `infinity_xmas.tre` are in a separate `swgemu_preload.cfg` with its own `[SharedFile]` header, and that file is included after `swgemu_live.cfg`, the second `[SharedFile]` section wipes out all 25 patch `.tre` entries from the first. The game then only sees 2 of 27 archives.
+**Root cause:** the Infinity client refuses to load its `.tre` archives unless launched with the launcher's command-line config arguments (`-- -s Station subscriptionFeatures=1 gameFeatures=65535 ...`, extracted from `infinity-launcher.exe`). Launched bare, TreeFile silently registers nothing and the first asset lookup is fatal. A `WINEDEBUG=+file` trace confirms it: configs are read, but not a single `.tre` is ever opened.
 
-**Fix:** run `swg login`—it patches the base `.tre` entries directly into `swgemu_live.cfg`'s `[SharedFile]` section. If you previously created a `swgemu_preload.cfg`, delete it and remove its `.include` line from `swgemu.cfg`.
+**Fix:** use `swg launch`—it passes the required arguments automatically.
+
+### `allocate_virtual_memory out of memory` (int3 crash)
+
+The client's memory manager preallocates ~75% of the RAM Wine reports (~2.6 GB) as one contiguous block at startup. Under wow64 on Apple Silicon, the 32-bit address space is fragmented by dyld, Rosetta, and libSystem—a contiguous 2.6 GB region doesn't exist, so the allocation fails and the game dies before loading anything.
+
+**Fix:** `swg launch` caps the preallocation via the `SWGCLIENT_MEMORY_SIZE_MB` environment variable (default 1024 MB—the Windows launcher sets this same variable). Override with:
+
+```bash
+SWG_MEMORY_MB=1536 swg launch
+```
 
 ### CWD / libinotify crashes
 
@@ -187,7 +200,7 @@ SWG Infinity uses a custom anticheat called Sentinel—DLL injection, not kernel
 
 ### Performance tips
 
-- **DXMT enabled**: Make sure DirectX-to-Metal is toggled on in the Configure app. This is the biggest performance lever on Apple Silicon.
+- **DXMT does not apply to SWG**: DXMT has no 32-bit x86 support, so the wrapper's DXMT toggle is inert for this game. The game renders through Wine's builtin d3d9 (WineD3D→OpenGL)—confirmed by GLSL shader logs at runtime. No wrapper configuration needed.
 - **Graphics settings**: SWG's renderer is DirectX 9, which Wine translates well. Start moderate and increase.
 - **Disable overlays**: Discord overlay and similar tools can conflict—disable them if you see crashes.
 - **Weird FPS limit**: If the game runs at 120fps with VSync on (should be 60fps), the SWG Restoration community recommends ReShade to enforce the cap. Run in windowed/borderless to avoid recompilation on tab-out.

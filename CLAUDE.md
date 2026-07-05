@@ -65,6 +65,8 @@ The Infinity Launcher (Tauri/Rust + WebView2) crashes under Wine—page fault in
 - **Wine prefix**: `Contents/SharedSupport/prefix/`
 - **Game dir**: `prefix/drive_c/SWG Infinity/`
 - **Config parser quirk**: duplicate `[SharedFile]` sections replace rather than merge—all `.tre` entries must live in one section (`swg login` handles this)
+- **Launch requirements**: the client won't load `.tre` archives without the launcher's command-line config args, and its ~2.6 GB startup preallocation must be capped via `SWGCLIENT_MEMORY_SIZE_MB` to fit wow64's 32-bit address space—`swg launch` handles both (see `infrastructure.md` § What the Launcher Provides at Launch)
+- **DXMT is inert for SWG**: no 32-bit x86 support; the game renders via Wine's builtin d3d9 (WineD3D→OpenGL)
 
 ## Project Thorn
 
