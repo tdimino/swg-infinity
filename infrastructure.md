@@ -20,6 +20,7 @@ The game client loads configs via `.include` directives in `swgemu.cfg`:
 .include "options.cfg"
 .include "swgemu_live.cfg"
 .include "swgemu_login.cfg"
+.include "user_autologin.cfg"   (CLI addition — session auto-login, absent unless launching)
 .include "user_infinity.cfg"
 .include "user.cfg"
 ```
@@ -59,8 +60,10 @@ Key IPC commands exposed by the Rust backend:
 |----------|-----|---------|
 | `swginfinity.com` | 104.21.73.95 / 172.67.189.90 | Website (Cloudflare) |
 | `api.swginfinity.com` | 104.21.73.95 / 172.67.189.90 | Backend API (Cloudflare) |
-| `game.swginfinity.com` | 148.113.160.16 | Game server |
-| `live.swginfinity.com` | 51.222.153.102 | Live server (alt?) |
+| `api2.swginfinity.com` | — | Launcher API (the one the launcher actually calls) |
+| `game.swginfinity.com` | 148.113.160.16 (OVH, direct) | LIVE login server — port **14453** |
+| `tc.swginfinity.com` | — | Test Center login server — port 24453 |
+| `live.swginfinity.com` | 51.222.153.102 (OVH, direct) | Unreferenced by the launcher |
 
 ### API endpoints
 
@@ -71,8 +74,12 @@ Key IPC commands exposed by the Rust backend:
 | `https://updater.swginfinity.com/api/v2/launcher/update-check` | GET | No | Launcher version check |
 | `https://my.swginfinity.com/api/auth/login` | POST | No | Login (username, password, mfaEnabled, sessionDurationDays) |
 | `https://my.swginfinity.com/api/auth/email-code` | POST | MFA token | Request email MFA code |
-| `https://my.swginfinity.com/api/auth/verify-email-code` | POST | MFA token + code | Verify MFA and get session |
-| `https://api.swginfinity.com/api/v2/...` | Various | Bearer token | Authenticated game API (endpoints unknown) |
+| `https://my.swginfinity.com/api/auth/verify-email-code` | POST | MFA token + code | Verify MFA → `{accessToken, refreshToken, sessionId}` |
+| `https://my.swginfinity.com/api/auth/refresh` | POST | `{refreshToken}` | Rotate tokens → `{accessToken, refreshToken, sessionId}` — no MFA |
+| `https://api2.swginfinity.com/api/v2/launcher/config` | GET | Bearer token | Launcher configuration |
+| `https://api2.swginfinity.com/api/v2/game/session` | POST | Bearer token, `{"server":"live"}` | Game session → `{host, port, sessionId, serverEnv}` |
+
+Note: `api.swginfinity.com` (without the `2`) serves the website; the launcher's authenticated calls go to **`api2`** — recovered from the launcher's brotli-compressed frontend bundle (`/assets/index-*.js`), along with the hardcoded server table: `LIVE: game.swginfinity.com:14453`, `TC: tc.swginfinity.com:24453`.
 
 ### Authentication flow
 
@@ -87,19 +94,21 @@ Key IPC commands exposed by the Rust backend:
 3. POST /api/auth/verify-email-code { mfaToken, code }
    → { accessToken, refreshToken, expiresAt }
 
-4. Launcher uses accessToken to call authenticated API
-   → Receives loginHost, loginPort, sessionId for game launch
+4. Launcher POSTs api2.swginfinity.com/api/v2/game/session {"server":"live"}
+   → Receives {host, port, sessionId, serverEnv} for game launch
+
+(Our CLI shortcut: the sessionId already arrives in the verify/refresh
+responses, so swg login uses those directly.)
 ```
 
-### Standard SWGEmu ports
+### Login server ports
 
-| Port | Purpose |
-|------|---------|
-| 44453 | Login server |
-| 44454 | Zone server (typical) |
-| 44455 | Ping server |
+| Server | Host | Port |
+|--------|------|------|
+| LIVE | `game.swginfinity.com` | **14453** (UDP) |
+| Test Center | `tc.swginfinity.com` | 24453 (UDP) |
 
-Note: Ports on `game.swginfinity.com` appear filtered from external scans. The game server may require authentication before accepting connections, or may use non-standard ports.
+Infinity does **not** use the canonical SWGEmu login port (44453) — connecting there produces the client's "Login Server is currently not available" timeout. The real ports were recovered from the launcher frontend's hardcoded server table. `swg login` writes 14453 by default; `swg server <host:port>` pins an override.
 
 ---
 
@@ -117,7 +126,7 @@ swgemu.exe -- -s Station subscriptionFeatures=1 gameFeatures=65535 -s SwgClient 
 
 Launched bare, the client reads every config file normally but TreeFile registers zero archives — a `WINEDEBUG=+file` trace shows the `.cfg` reads with not a single `.tre` open following them. The first asset lookup then dies: `FATAL 4d962776: appearance/defaultappearance.apt could not be found` (`int3` at `swgemu+0x6a1e3f`, the Fatal() handler). With the args, all 25 patch archives open and the game reaches the title screen.
 
-The launcher also passes `-s ClientGame loginServerAddress0=<host> loginServerPort0=<port> sessionId=<id>` — the address/port are redundant with `swgemu_login.cfg` (which we write), and `sessionId` enables auto-login past the login screen (not yet replicated; manual login works).
+The launcher also passes `-s ClientGame loginServerAddress0=<host> loginServerPort0=<port> sessionId=<id>` — the address/port are redundant with `swgemu_login.cfg` (which we write), and `sessionId` enables auto-login past the login screen. `swg launch --login` replicates this via a just-in-time `user_autologin.cfg` (chmod 600, deleted after the game exits) carrying `loginClientID`, `loginClientPassword`, and `sessionId` from the auth API. Toggle with `swg autologin on|off`.
 
 ### Client memory manager cap (critical under Wine)
 
@@ -136,7 +145,8 @@ Server connection details — written by the launcher after authentication. Our 
 ```ini
 [ClientGame]
 loginServerAddress0=game.swginfinity.com
-loginServerPort0=44453
+loginServerPort0=14453
+autoConnectToLoginServer=true
 ```
 
 ### Working directory (critical)

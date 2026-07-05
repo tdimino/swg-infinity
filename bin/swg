@@ -22,6 +22,9 @@ Commands:
   audit                  Validate config and TRE files
   status                 Show wrapper state and server reachability
   config [key [value]]   Read/write Sikarugir plist flags
+  options [key [value]]  Read/write game display settings (options.cfg)
+  autologin [on|off]     Toggle in-game login-screen skip for launch --login
+  server [host:port]     Pin the login server (overrides discovery)
   winetricks <verb>      Install winetricks components
   shell                  Open subshell with Wine env vars set
   kill                   Kill the wineserver
@@ -41,6 +44,9 @@ case "$cmd" in
     audit)      swg_cmd_audit "$@" ;;
     status)     swg_cmd_status "$@" ;;
     config)     swg_cmd_config "$@" ;;
+    options)    swg_cmd_options "$@" ;;
+    autologin)  swg_cmd_autologin "$@" ;;
+    server)     swg_cmd_server "$@" ;;
     winetricks) swg_cmd_winetricks "$@" ;;
     shell)      swg_cmd_shell "$@" ;;
     kill)       swg_cmd_kill "$@" ;;

@@ -21,6 +21,19 @@ swg_audit_system() {
     else
         swg_log "  GPU info unavailable"
     fi
+
+    # Display environment snapshot — mode-change failures depend on the mode
+    # list macOS exposes, which shifts with scaling/refresh/monitor changes.
+    swg_log "--- Displays ---"
+    local disp_info
+    disp_info=$(system_profiler SPDisplaysDataType 2>/dev/null \
+        | grep -E 'Display Type|Resolution|UI Looks like|Refresh|Main Display|Connection Type|Mirror' \
+        | sed 's/^[[:space:]]*/  /' || true)
+    if [ -n "$disp_info" ]; then
+        echo "$disp_info" | while IFS= read -r dl; do swg_log "$dl"; done
+    else
+        swg_log "  display info unavailable"
+    fi
 }
 
 swg_audit_configs() {
@@ -58,6 +71,9 @@ swg_audit_configs() {
         while IFS= read -r inc_line; do
             local inc_file
             inc_file=$(echo "$inc_line" | grep -o '"[^"]*"' | tr -d '"' || true)
+            # user_autologin.cfg is written just-in-time at launch and deleted
+            # after — absent by design outside a live session
+            [ "$inc_file" = "user_autologin.cfg" ] && continue
             if [ -n "$inc_file" ] && [ ! -f "$GAME_DIR/$inc_file" ]; then
                 swg_log "  swgemu.cfg: WARNING — .include \"$inc_file\" but file missing"
             fi

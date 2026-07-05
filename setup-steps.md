@@ -67,10 +67,10 @@ cp -R ./game-files/* "$WRAPPER/SWG Infinity/"   # from the repo root
 ## 8. Authenticate
 
 ```bash
-swg login
+swg login --save
 ```
 
-Authenticates via MFA and writes `swgemu_login.cfg` + `swgemu.cfg` into the game directory. Also patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`) if missing—these must be in the same `[SharedFile]` section as the patch entries, not in a separate config file.
+First run: authenticates via MFA (code arrives by email) and stores credentials in the macOS Keychain. Every run after that is zero-prompt—a stored refresh token skips MFA. Writes `swgemu_login.cfg` (server `game.swginfinity.com:14453`) + `swgemu.cfg` into the game directory, and patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`) if missing—these must be in the same `[SharedFile]` section as the patch entries, not in a separate config file.
 
 ## 9. Launch
 
@@ -100,6 +100,8 @@ This runs Wine directly with the correct CWD. Use `swg launch --login` to authen
 | "No new executables found" after DirectX install | Expected — use Winetricks `d3dx9` instead of the redistributable |
 | `defaultappearance.apt could not be found` / `int3` crash | Game launched without the launcher's command-line args — the client won't load `.tre` archives without them. Use `swg launch` (passes them automatically). |
 | `allocate_virtual_memory out of memory` | Client preallocates ~2.6 GB, too big for Wine's 32-bit address space. `swg launch` caps it at 1024 MB via `SWGCLIENT_MEMORY_SIZE_MB`; adjust with `SWG_MEMORY_MB`. |
+| `Login Server is currently not available` | Wrong login address — Infinity uses port **14453**, not SWGEmu's 44453. `swg login` writes the right one; `swg server <host:port>` pins an override. |
+| Black screen, game exits in ~20s | Game resolution larger than the scaled macOS desktop → fullscreen fallback to a nonexistent mode. `swg options resolution 1728x1080` (or whatever fits). |
 | `libinotify.0.dylib` not loaded | Use `swg launch` (sets `DYLD_FALLBACK_LIBRARY_PATH`) instead of double-clicking the wrapper |
 | Game crashes immediately after MoltenVK init | CWD wrong — use `swg launch`, not Sikarugir's built-in launch |
 | Weird FPS / VSync issues | Run in windowed/borderless mode |

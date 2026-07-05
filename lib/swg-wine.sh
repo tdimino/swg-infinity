@@ -6,6 +6,11 @@ swg_setup_wine_env() {
     export WINEESYNC=1
     export WINEMSYNC=1
     export DYLD_FALLBACK_LIBRARY_PATH="$WRAPPER/Contents/Frameworks:$WRAPPER/Contents/SharedSupport/wine/lib"
+    # SWG_DEBUG_DISPLAY=1 traces winemac.drv mode matching — shows exactly
+    # which display mode the game requests when ChangeDisplaySettings fails.
+    if [ "${SWG_DEBUG_DISPLAY:-0}" = "1" ]; then
+        export WINEDEBUG="+display,+system"
+    fi
     # Cap the client's startup memory preallocation. Uncapped, it reserves 75%
     # of the RAM Wine reports (~2.6 GB) as one contiguous block, which cannot
     # fit in the fragmented 32-bit address space under wow64.
@@ -25,7 +30,9 @@ swg_run_exe() {
 
     local marker="$log_dir/.launch-marker-$$"
     touch "$marker"
-    trap 'rm -f "$marker"' EXIT
+    # Also remove the session auto-login include on any exit path — it holds
+    # a live session token and must not outlive the game process.
+    trap 'rm -f "$marker" "$GAME_DIR/user_autologin.cfg"' EXIT INT TERM
 
     swg_log "--- Launching $exe ---"
     swg_log "CWD: $GAME_DIR"
@@ -45,11 +52,36 @@ swg_run_exe() {
     if [ "$exit_code" -ne 0 ]; then
         swg_report_crash "$exit_code" "$elapsed" "$marker"
     fi
+    swg_scan_known_errors
 
-    rm -f "$marker"
-    trap - EXIT
+    rm -f "$marker" "$GAME_DIR/user_autologin.cfg"
+    trap - EXIT INT TERM
     swg_log "Log saved: $SWG_LOG_FILE"
     return "$exit_code"
+}
+
+# Scan the launch log for known failure signatures and print a diagnosis —
+# the raw Wine spew buries these, and each maps to a specific fix.
+swg_scan_known_errors() {
+    [ -f "$SWG_LOG_FILE" ] || return 0
+    local n
+    n=$(grep -c 'NtUserChangeDisplaySettings' "$SWG_LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$n" -gt 0 ]; then
+        swg_log "DIAGNOSIS: $n display mode-change failure(s) — macOS refused the mode the game requested."
+        swg_log "  Rerun with SWG_DEBUG_DISPLAY=1 to see the requested mode; check 'swg options' resolution/refresh"
+        swg_log "  against the Displays snapshot above; a reboot clears wedged WindowServer display state."
+    fi
+    if grep -q 'GL_INVALID_FRAMEBUFFER_OPERATION' "$SWG_LOG_FILE" 2>/dev/null; then
+        swg_log "DIAGNOSIS: OpenGL framebuffer incomplete — rendering produced a black window."
+        swg_log "  Usually secondary to a failed display-mode change (see above)."
+    fi
+    if grep -q 'allocate_virtual_memory out of memory' "$SWG_LOG_FILE" 2>/dev/null; then
+        swg_log "DIAGNOSIS: 32-bit address space exhaustion — lower SWG_MEMORY_MB (current: ${SWG_MEMORY_MB:-1024})."
+    fi
+    if grep -q 'defaultappearance.apt could not be found' "$SWG_LOG_FILE" 2>/dev/null; then
+        swg_log "DIAGNOSIS: TreeFile loaded no archives — client launched without required config args."
+    fi
+    return 0
 }
 
 swg_report_crash() {
@@ -93,6 +125,9 @@ swg_cmd_launch() {
         esac
     done
 
+    # Stale session include from a crashed run — never reuse
+    rm -f "$GAME_DIR/user_autologin.cfg"
+
     if [ "$do_login" = true ]; then
         swg_cmd_login
     fi
@@ -101,12 +136,19 @@ swg_cmd_launch() {
         swg_die "Launch aborted — fix the issues above first"
     fi
 
+    if [ "${SWG_AUTOLOGIN:-1}" = "1" ] && [ -n "${_swg_session_id:-}" ] && [ -n "${_swg_auth_username:-}" ]; then
+        swg_write_autologin_cfg
+    fi
+
     # The client refuses to load its .tre archives unless launched with the
     # launcher's config args (extracted from infinity-launcher.exe) — without
     # them TreeFile registers nothing and the first asset lookup is fatal.
+    local rc=0
     swg_run_exe swgemu.exe -- \
         -s Station subscriptionFeatures=1 gameFeatures=65535 \
-        -s SwgClient allowMultipleInstances=true
+        -s SwgClient allowMultipleInstances=true || rc=$?
+    rm -f "$GAME_DIR/user_autologin.cfg"
+    return "$rc"
 }
 
 swg_cmd_shell() {

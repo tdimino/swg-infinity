@@ -46,7 +46,7 @@ softwareupdate --install-rosetta --agree-to-license
 6. Save it to your Applications folder
 7. When the popup appears, select **Launch It**
 
-You'll see the Configure app. Enable **DirectX to Metal translation layer (DXMT)**.
+You'll see the Configure app. You can enable **DirectX to Metal translation layer (DXMT)**, though note it has no effect on SWG itself—DXMT doesn't support 32-bit x86, and the game renders via Wine's builtin d3d9 (WineD3D→OpenGL). Harmless either way, and useful if you run other games in the wrapper.
 
 ## Install DirectX
 
@@ -83,6 +83,9 @@ make install    # symlinks bin/swg → ~/bin/swg
 | `swg audit` | Validate config files, `.tre` references, plist flags—exit 0 if clean |
 | `swg status` | Show Wine version, active renderer, file counts, server reachability |
 | `swg config [key [value]]` | Read/write Sikarugir plist flags (DXMT, WINEESYNC, etc.) |
+| `swg options [key [value]]` | Read/write game display settings (`swg options resolution 1728x1080`) |
+| `swg autologin [on\|off]` | Toggle the in-game login-screen skip for `launch --login` |
+| `swg server [host:port]` | Pin the login server, overriding discovery (`--clear` to revert) |
 | `swg winetricks <verb>` | Install components via the wrapper's winetricks |
 | `swg shell` | Open subshell with `WINEPREFIX` and Wine env vars set |
 | `swg kill` | Kill the wineserver |
@@ -142,13 +145,15 @@ Once you have the game files in your wrapper:
 The launcher normally handles login and config generation. Since we bypass it:
 
 ```bash
-swg login --save    # first time — stores credentials in macOS Keychain
-swg login           # subsequent — auto-uses stored credentials
+swg login --save    # first time — MFA once, stores credentials in macOS Keychain
+swg login           # subsequent — refresh token skips MFA entirely
 ```
 
-This authenticates via MFA (check your email for the code), writes `swgemu_login.cfg` with server connection details, generates `swgemu.cfg` with the correct include chain, and patches `swgemu_live.cfg` with base `.tre` entries (`bottom.tre`, `infinity_xmas.tre`).
+The first login authenticates via MFA (check your email for the code). After that, a refresh token stored in the Keychain mints new sessions silently—no password, no MFA. Every login writes `swgemu_login.cfg` with the server connection (`game.swginfinity.com:14453`), generates `swgemu.cfg` with the correct include chain, and patches `swgemu_live.cfg` with base `.tre` entries.
 
-Credentials are stored in the macOS Keychain (encrypted, not plaintext). Run `swg login --forget` to remove them.
+`swg launch --login` goes one step further: it carries the session into the game via a just-in-time `user_autologin.cfg` (chmod 600, deleted when the game exits), pre-filling the in-game login. Toggle with `swg autologin on|off`.
+
+All secrets live in the macOS Keychain (encrypted, never on process command lines). Run `swg login --forget` to remove everything.
 
 ### Launch
 
@@ -168,7 +173,7 @@ This runs Wine directly with the correct CWD, sets `DYLD_FALLBACK_LIBRARY_PATH` 
 
 - First time setup will ask you to set graphics options
 - Enable **Windowed** and **Borderless** for best macOS experience
-- Start with moderate settings and increase—SWG's DirectX 9 renderer translates well through DXMT
+- Start with moderate settings and increase—SWG's DirectX 9 renderer translates well through WineD3D→OpenGL
 
 ## Troubleshooting
 
@@ -189,6 +194,25 @@ The client's memory manager preallocates ~75% of the RAM Wine reports (~2.6 GB) 
 ```bash
 SWG_MEMORY_MB=1536 swg launch
 ```
+
+### `The Login Server is currently not available`
+
+A UDP connection timeout—the client is pointed at the wrong address. Infinity does **not** use the standard SWGEmu login port: LIVE is `game.swginfinity.com:14453` (Test Center: `tc.swginfinity.com:24453`), extracted from the launcher's frontend bundle. `swg login` writes the correct port; if the server ever moves, pin the new address without waiting for a CLI update:
+
+```bash
+swg server <host:port>
+swg login
+```
+
+### Black screen, then the game exits (~20 s)
+
+The game wants a window bigger than your desktop, falls back to exclusive fullscreen at a mode macOS doesn't offer, and gives up (`NtUserChangeDisplaySettings ... returned -2` in the log, 36 retries). This happens when macOS display scaling shrinks the desktop below the game's configured resolution—e.g. default MacBook scaling is 1728×1117 points, too small for a 1920×1080 window. Fix by matching the game to your desktop:
+
+```bash
+swg options resolution 1728x1080    # or anything that fits your scaling
+```
+
+`swg audit` logs a display snapshot at every launch and `swg launch` prints a diagnosis when it detects this failure; `SWG_DEBUG_DISPLAY=1 swg launch` traces the exact modes requested and available.
 
 ### CWD / libinotify crashes
 
@@ -261,7 +285,7 @@ swg-infinity/
 │   ├── swg-audit.sh            # Config + TRE file validation
 │   ├── swg-auth.sh             # Auth flow, MFA, config writing
 │   ├── swg-download.sh         # Manifest fetch, file download, MD5 verify
-│   └── swg-manage.sh           # Status, config, winetricks subcommands
+│   └── swg-manage.sh           # Status, config, options, autologin, server, winetricks
 ├── completions/swg.zsh         # Zsh tab completions
 ├── Makefile                    # install/uninstall
 ├── launch.sh                   # Shim → swg launch
